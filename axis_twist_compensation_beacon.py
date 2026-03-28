@@ -121,14 +121,20 @@ class AxisTwistCompensationBeacon:
 
         # Report
         values_str = ', '.join(["%.6f" % v for v in normalized])
+        variance = sum((v - avg) ** 2 for v in results) / len(results)
+        stddev = variance ** 0.5
+        max_deviation = max(abs(v) for v in normalized)
         gcmd.respond_info(
             "AXIS_TWIST_COMPENSATION_BEACON: Calibration complete!\n"
             "  Axis: %s\n"
             "  Points: %d\n"
             "  Offsets: %s\n"
             "  Mean z_offset: %.6f\n"
+            "  Standard deviation: %.6f\n"
+            "  Max deviation: %.6f\n"
             "  State saved for current session. Run SAVE_CONFIG "
-            "to persist." % (axis, len(normalized), values_str, avg))
+            "to persist." % (axis, len(normalized), values_str, avg,
+                             stddev, max_deviation))
 
     def _get_calibration_points(self, axis, sample_count, gcmd):
         """Calculate the nozzle positions for calibration."""
