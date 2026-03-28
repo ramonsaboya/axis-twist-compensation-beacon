@@ -28,7 +28,7 @@ The resulting compensation values are saved to `[axis_twist_compensation]` just 
 
 ```bash
 cd ~
-git clone https://github.com/YOUR_USERNAME/axis-twist-compensation-beacon.git
+git clone https://github.com/ramonsaboya/axis-twist-compensation-beacon.git
 cd axis-twist-compensation-beacon
 ./install.sh
 ```
