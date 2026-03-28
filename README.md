@@ -20,6 +20,7 @@ The resulting compensation values are saved to `[axis_twist_compensation]` just 
 
 - **Beacon probe** with both scan (proximity) and contact (touch) calibrated
 - **Klipper** with `[axis_twist_compensation]` section configured
+- `position_min: -2` (or lower) in your `[stepper_z]` config — required for Beacon contact probing
 - Standard Beacon Contact safety precautions (clean nozzle, metallic bed target)
 
 ## Installation

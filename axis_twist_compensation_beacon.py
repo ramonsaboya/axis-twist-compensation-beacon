@@ -178,30 +178,33 @@ class AxisTwistCompensationBeacon:
         toolhead = self.printer.lookup_object('toolhead')
         results = []
 
+        # Get Beacon's XY offset from the nozzle so we can position
+        # the proximity sensor directly over the calibration point.
+        probe_offsets = self.beacon.get_offsets()
+        x_offset = probe_offsets[0]
+        y_offset = probe_offsets[1]
+
         for i, (nx, ny) in enumerate(nozzle_points):
             gcmd.respond_info(
                 "AXIS_TWIST_COMPENSATION_BEACON: Probing point "
                 "%d of %d (%.1f, %.1f)"
                 % (i + 1, len(nozzle_points), nx, ny))
 
-            # Move to safe Z height
-            self._move(toolhead, None, None, horizontal_move_z, speed)
-
-            # Move nozzle to the calibration point
-            self._move(toolhead, nx, ny, None, speed)
-
             # --- Proximity (scan) probe ---
+            # Move the nozzle so the probe sensor is over the
+            # calibration point (nozzle position = point - offset)
+            self._move(toolhead, None, None, horizontal_move_z, speed)
+            self._move(toolhead,
+                       nx - x_offset, ny - y_offset, None, speed)
+
             proximity_z = self._probe_proximity(gcmd)
 
             gcmd.respond_info(
                 "  Proximity (scan) Z: %.6f" % proximity_z)
 
-            # Move to safe Z height
-            self._move(toolhead, None, None, horizontal_move_z, speed)
-
             # --- Contact (touch) probe ---
-            # Move nozzle back to calibration point (should still
-            # be there, but explicit for clarity)
+            # Move nozzle directly to the calibration point
+            self._move(toolhead, None, None, horizontal_move_z, speed)
             self._move(toolhead, nx, ny, None, speed)
 
             contact_z = self._probe_contact(
