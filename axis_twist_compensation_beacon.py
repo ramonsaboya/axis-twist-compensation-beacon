@@ -1,16 +1,13 @@
 # Axis Twist Compensation Beacon
 #
 # Automates axis twist compensation calibration using Beacon's
-# proximity (scan) and contact (touch) probing modes, eliminating
-# the need for manual paper-test nozzle probing.
+# BEACON_OFFSET_COMPARE command, which measures the offset between
+# contact (touch) and proximity (scan) probing at each point.
 #
 # Copyright (C) 2024-2026
 # This file may be distributed under the terms of the GNU GPLv3 license.
 
 from . import axis_twist_compensation
-
-DEFAULT_CONTACT_SAMPLES = 3
-DEFAULT_RETRACT_DIST = 2.0
 
 
 class AxisTwistCompensationBeacon:
@@ -24,11 +21,6 @@ class AxisTwistCompensationBeacon:
         self.horizontal_move_z = config.getfloat(
             'horizontal_move_z',
             axis_twist_compensation.DEFAULT_HORIZONTAL_MOVE_Z)
-        self.probe_speed = config.getfloat('probe_speed', None)
-        self.contact_samples = config.getint(
-            'contact_samples', DEFAULT_CONTACT_SAMPLES)
-        self.retract_dist = config.getfloat(
-            'retract_dist', DEFAULT_RETRACT_DIST)
 
         # Internal state — populated on klippy:connect
         self.beacon = None
@@ -74,11 +66,6 @@ class AxisTwistCompensationBeacon:
         speed = gcmd.get_float('SPEED', self.speed)
         horizontal_move_z = gcmd.get_float(
             'HORIZONTAL_MOVE_Z', self.horizontal_move_z)
-        probe_speed = gcmd.get_float(
-            'PROBE_SPEED', self.probe_speed or self.beacon.speed)
-        contact_samples = gcmd.get_int(
-            'CONTACT_SAMPLES', self.contact_samples)
-        retract_dist = gcmd.get_float('RETRACT_DIST', self.retract_dist)
 
         if sample_count < 2:
             raise gcmd.error("SAMPLE_COUNT must be at least 2")
@@ -104,12 +91,18 @@ class AxisTwistCompensationBeacon:
             "AXIS_TWIST_COMPENSATION_BEACON: Starting %s axis "
             "calibration with %d points" % (axis, len(nozzle_points)))
 
-        # Perform calibration
-        results = self._calibrate(
-            gcmd, nozzle_points, speed, horizontal_move_z,
-            probe_speed, contact_samples, retract_dist)
+        # Clear existing compensation for this axis so it doesn't
+        # interfere with calibration measurements
+        self.axis_comp.clear_compensations(axis)
 
-        # Normalize results (subtract mean)
+        # Perform calibration using BEACON_OFFSET_COMPARE
+        deltas = self._calibrate(
+            gcmd, nozzle_points, speed, horizontal_move_z)
+
+        # Convert deltas to compensation values
+        # BEACON_OFFSET_COMPARE delta = contact_z - proximity_z
+        # Klipper expects proximity_z - contact_z, so negate
+        results = [-d for d in deltas]
         avg = sum(results) / len(results)
         normalized = [avg - r for r in results]
 
@@ -178,17 +171,10 @@ class AxisTwistCompensationBeacon:
 
         return points
 
-    def _calibrate(self, gcmd, nozzle_points, speed, horizontal_move_z,
-                   probe_speed, contact_samples, retract_dist):
-        """Run the calibration sequence at each point."""
+    def _calibrate(self, gcmd, nozzle_points, speed, horizontal_move_z):
+        """Run BEACON_OFFSET_COMPARE at each calibration point."""
         toolhead = self.printer.lookup_object('toolhead')
-        results = []
-
-        # Get Beacon's XY offset from the nozzle so we can position
-        # the proximity sensor directly over the calibration point.
-        probe_offsets = self.beacon.get_offsets()
-        x_offset = probe_offsets[0]
-        y_offset = probe_offsets[1]
+        deltas = []
 
         for i, (nx, ny) in enumerate(nozzle_points):
             gcmd.respond_info(
@@ -196,95 +182,23 @@ class AxisTwistCompensationBeacon:
                 "%d of %d (%.1f, %.1f)"
                 % (i + 1, len(nozzle_points), nx, ny))
 
-            # --- Proximity (scan) probe ---
-            # Move the nozzle so the probe sensor is over the
-            # calibration point (nozzle position = point - offset)
-            self._move(toolhead, None, None, horizontal_move_z, speed)
-            self._move(toolhead,
-                       nx - x_offset, ny - y_offset, None, speed)
+            # Move to safe Z, then to calibration point
+            toolhead.manual_move([None, None, horizontal_move_z], speed)
+            toolhead.manual_move([nx, ny, None], speed)
 
-            proximity_z = self._probe_proximity(gcmd)
+            # Run BEACON_OFFSET_COMPARE — it handles contact probe,
+            # offset move, and proximity reading internally
+            offset_gcmd = self.gcode.create_gcode_command(
+                "BEACON_OFFSET_COMPARE", "BEACON_OFFSET_COMPARE", {})
+            self.beacon.cmd_BEACON_OFFSET_COMPARE(offset_gcmd)
 
-            gcmd.respond_info(
-                "  Proximity (scan) Z: %.6f" % proximity_z)
-
-            # --- Contact (touch) probe ---
-            # Move nozzle directly to the calibration point
-            self._move(toolhead, None, None, horizontal_move_z, speed)
-            self._move(toolhead, nx, ny, None, speed)
-
-            contact_z = self._probe_contact(
-                gcmd, probe_speed, contact_samples, retract_dist)
+            delta = self.beacon.last_offset_result["delta"]
+            deltas.append(delta)
 
             gcmd.respond_info(
-                "  Contact (touch) Z: %.6f" % contact_z)
+                "  Delta: %.6f (%.1f um)" % (delta, delta * 1000))
 
-            # The twist error is the difference between what the
-            # proximity probe reads and what the nozzle actually
-            # touches at. This captures the Z offset variation caused
-            # by rail twist at this X/Y position.
-            twist_error = proximity_z - contact_z
-            results.append(twist_error)
-
-            gcmd.respond_info(
-                "  Twist error: %.6f" % twist_error)
-
-            # Move back to safe height
-            self._move(toolhead, None, None, horizontal_move_z, speed)
-
-        return results
-
-    def _probe_proximity(self, gcmd):
-        """Run a single Beacon proximity (scan/induction) probe."""
-        beacon = self.beacon
-
-        # Use Beacon's internal probe method with proximity mode
-        old_method = beacon.default_probe_method
-        beacon.default_probe_method = 'proximity'
-        try:
-            beacon._start_streaming()
-            try:
-                result = beacon._probe(beacon.speed)
-            finally:
-                beacon._stop_streaming()
-        finally:
-            beacon.default_probe_method = old_method
-
-        return result[2]
-
-    def _probe_contact(self, gcmd, probe_speed, sample_count,
-                       retract_dist):
-        """Run Beacon contact (touch/nozzle) probing with averaging."""
-        beacon = self.beacon
-        toolhead = self.printer.lookup_object('toolhead')
-        samples = []
-
-        lift_speed = beacon.get_lift_speed()
-
-        beacon._start_streaming()
-        try:
-            beacon.mcu_contact_probe.activate_gcode \
-                .run_gcode_from_command()
-            try:
-                for s in range(sample_count):
-                    pos = beacon._probe_contact(probe_speed)
-                    samples.append(pos[2])
-                    # Retract between samples
-                    posxy = toolhead.get_position()[:2]
-                    toolhead.manual_move(
-                        posxy + [pos[2] + retract_dist], lift_speed)
-            finally:
-                beacon.mcu_contact_probe.deactivate_gcode \
-                    .run_gcode_from_command()
-        finally:
-            beacon._stop_streaming()
-
-        # Return mean of samples
-        return sum(samples) / len(samples)
-
-    def _move(self, toolhead, x, y, z, speed):
-        """Move the toolhead, None values = don't change that axis."""
-        toolhead.manual_move([x, y, z], speed)
+        return deltas
 
     def _save_results(self, axis, points, compensations, gcmd):
         """Save calibration results to the config file."""
