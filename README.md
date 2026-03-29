@@ -44,6 +44,21 @@ cp axis_twist_compensation_beacon.py ~/klipper/klippy/extras/
 
 Then restart Klipper.
 
+### Moonraker Update Manager
+
+Add the following to your `moonraker.conf` to get automatic updates via Fluidd/Mainsail:
+
+```ini
+[update_manager axis-twist-compensation-beacon]
+type: git_repo
+path: ~/axis-twist-compensation-beacon
+origin: https://github.com/ramonsaboya/axis-twist-compensation-beacon.git
+primary_branch: main
+managed_services: klipper
+```
+
+Then restart Moonraker.
+
 ## Configuration
 
 Add these sections to your `printer.cfg`:
