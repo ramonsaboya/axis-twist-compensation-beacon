@@ -195,9 +195,6 @@ class AxisTwistCompensationBeacon:
             delta = self.beacon.last_offset_result["delta"]
             deltas.append(delta)
 
-            gcmd.respond_info(
-                "  Delta: %.6f (%.1f um)" % (delta, delta * 1000))
-
         return deltas
 
     def _save_results(self, axis, points, compensations, gcmd):
